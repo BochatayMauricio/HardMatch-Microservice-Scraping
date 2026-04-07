@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import logging
-from typing import List
+from typing import List, Optional
 from fastapi import HTTPException
 from google import genai
 
@@ -15,6 +15,40 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # Bajamos el lote a 5 para no saturar los tokens por minuto
 BATCH_SIZE = 5
+
+
+def _extract_json_payload(raw_text: str) -> Optional[object]:
+    """
+    Extrae un JSON válido desde el texto devuelto por el modelo.
+    """
+    cleaned = raw_text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0].strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return [json.loads(cleaned[start : end + 1])]
+        except json.JSONDecodeError:
+            return None
+
+    return None
 
 async def normalize_with_ia(items_crudos: List[dict]) -> List[ProductSchema]:
     if not client:
@@ -93,22 +127,34 @@ async def process_batch(batch_items: List[dict], max_retries: int = 3) -> List[P
             )
             
             raw_text = response.text.strip()
-            # Limpieza básica de markdown
-            if "```json" in raw_text:
-                raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-                
-            data = json.loads(raw_text)
-            return [ProductSchema(**item) for item in data]
+
+            data = _extract_json_payload(raw_text)
+            if data is None:
+                logging.warning("Respuesta IA sin JSON válido. Reintentando lote.")
+                continue
+
+            if not isinstance(data, list):
+                logging.warning("La respuesta IA no devolvió una lista. Reintentando lote.")
+                continue
+
+            normalized_items: List[ProductSchema] = []
+            for item in data:
+                try:
+                    normalized_items.append(ProductSchema(**item))
+                except Exception as exc:
+                    logging.warning(f"Item inválido en lote, se omite. Error: {str(exc)}")
+
+            return normalized_items
             
         except Exception as e:
-                error_msg = str(e)
-                
-                if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                    espera = 45 # Segundos seguros basados en el log
-                    logging.warning(f"Límite 429 alcanzado. Intento {attempt + 1}/{max_retries}. Pausando {espera}s...")
-                    await asyncio.sleep(espera)
-                else:
-                    logging.error(f"Error crítico parseando lote: {error_msg}")
-                    break 
+            error_msg = str(e)
+
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                espera = 45 # Segundos seguros basados en el log
+                logging.warning(f"Límite 429 alcanzado. Intento {attempt + 1}/{max_retries}. Pausando {espera}s...")
+                await asyncio.sleep(espera)
+            else:
+                logging.error(f"Error crítico parseando lote: {error_msg}")
+                break
                 
     return [] # Retorna vacío si agotó los reintentos

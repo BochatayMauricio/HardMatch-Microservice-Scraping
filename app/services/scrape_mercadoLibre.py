@@ -8,9 +8,10 @@ from urllib.parse import quote
 # Carga las variables del archivo .env al entorno de Python
 load_dotenv()
 
+
 async def scrape_mercadolibre(query: str, max_pages: int = 1) -> List[dict]:
     """
-    Scrapea múltiples páginas de Mercado Libre para enriquecer la BD.
+    Scrapea múltiples páginas de Mercado Libre por texto de búsqueda.
     max_pages: Cantidad de páginas a scrapear (cada página trae ~50 productos).
     """
     # 1. Formateo de URL Universal y seguro
@@ -58,7 +59,11 @@ async def scrape_mercadolibre(query: str, max_pages: int = 1) -> List[dict]:
                 # 3. Extracción robusta de los datos
                 title_el = el.select_one('h2.ui-search-item__title') or el.select_one('.poly-component__title')
                 current_price_el = el.select_one('.poly-price__current .andes-money-amount__fraction') or el.select_one('.andes-money-amount__fraction')
-                previous_price_el = el.select_one('.poly-price__previous .andes-money-amount__fraction')
+                previous_price_el = (
+                    el.select_one('.poly-price__previous .andes-money-amount__fraction')
+                    or el.select_one('.andes-money-amount--previous .andes-money-amount__fraction')
+                    or el.select_one('.poly-price__original .andes-money-amount__fraction')
+                )
                 seller_el = el.select_one('.poly-component__seller') or el.select_one('.ui-search-official-store-label')
                 installments_el = el.select_one('.poly-price__installments') or el.select_one('.ui-search-installments')
                 url_el = el.select_one('a')
@@ -67,7 +72,10 @@ async def scrape_mercadolibre(query: str, max_pages: int = 1) -> List[dict]:
                     continue
                     
                 precio_actual = current_price_el.get_text(strip=True).replace('.', '')
-                precio_anterior = previous_price_el.get_text(strip=True).replace('.', '') if previous_price_el else None
+                if previous_price_el:
+                    precio_anterior = previous_price_el.get_text(strip=True).replace('.', '')
+                else:
+                    precio_anterior = None
                 
                 items_crudos.append({
                     "titulo": title_el.get_text(strip=True),
