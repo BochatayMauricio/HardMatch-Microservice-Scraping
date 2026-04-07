@@ -7,15 +7,17 @@ from app.schemas.product_schema import ProductSchema
 from app.services.scrape_mercadoLibre import scrape_mercadolibre
 from app.services.normalize_data import normalize_data
 
-# Instanciamos el router. 
-# Le agregamos un prefijo y etiquetas para que la documentación en /docs
 router = APIRouter(
     prefix="/mercadolibre",
     tags=["Mercado Libre"]
 )
 
 @router.get("/scrape-by-query", response_model=List[ProductSchema])
-async def do_scrape_and_normalize(q: str = Query("Productos", description="Término de búsqueda"),max_pages: int = Query(1, ge=1, le=10, description="Cantidad de páginas a scrapear")):
+async def do_scrape_and_normalize(
+    q: str = Query("Productos", description="Termino de busqueda"),
+    max_pages: int = Query(1, ge=1, le=10, description="Cantidad de paginas a scrapear"),
+    include_details: bool = Query(False, description="Extraer caracteristicas desde la pagina del producto"),
+):
     """
     Endpoint maestro: Busca en ML, scrapea los resultados, 
     se los pasa a la IA para normalizar características y devuelve el modelo final.
@@ -23,7 +25,7 @@ async def do_scrape_and_normalize(q: str = Query("Productos", description="Térm
     logging.info(f"Iniciando flujo de scraping para: {q}")
     
     # 1. Delegamos al servicio de scraping (ahora usaría la versión con paginación)
-    items_crudos = await scrape_mercadolibre(query=q, max_pages=max_pages) 
+    items_crudos = await scrape_mercadolibre(query=q, max_pages=max_pages, include_details=include_details)
     
     if not items_crudos:
         return []

@@ -88,10 +88,16 @@ def _extract_category(title: str) -> Optional[str]:
 
 def _add_feature(features: List[FeatureSchema], keyword: str, value: Optional[str]) -> None:
     if value:
+        if any(f.keyword == keyword and f.value == value for f in features):
+            return
         features.append(FeatureSchema(keyword=keyword, value=value))
 
 
-def _extract_features(title: str, metodo_pago: Optional[str]) -> List[FeatureSchema]:
+def _extract_features(
+    title: str,
+    metodo_pago: Optional[str],
+    raw_features: Optional[List[dict]] = None,
+) -> List[FeatureSchema]:
     features: List[FeatureSchema] = []
     match = PROCESSOR_PATTERN.search(title)
     _add_feature(features, "procesador", match.group(1) if match else None)
@@ -171,6 +177,13 @@ def _extract_features(title: str, metodo_pago: Optional[str]) -> List[FeatureSch
         unit = match.group(4).lower()
         _add_feature(features, "dimensiones", f"{x}x{y}x{z} {unit}")
 
+    if raw_features:
+        for raw in raw_features:
+            keyword = (raw.get("keyword") or "").strip()
+            value = (raw.get("value") or "").strip()
+            if keyword and value:
+                _add_feature(features, keyword, value)
+
     if metodo_pago and metodo_pago.strip() and metodo_pago != "No especificado":
         _add_feature(features, "metodo_pago", metodo_pago.strip())
 
@@ -195,7 +208,8 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
 
         brand = _extract_brand(title) if title else None
         category = _extract_category(title) if title else None
-        features = _extract_features(title, metodo_pago)
+        raw_features = item.get("caracteristicas") or []
+        features = _extract_features(title, metodo_pago, raw_features)
 
         normalized.append(
             ProductSchema(
