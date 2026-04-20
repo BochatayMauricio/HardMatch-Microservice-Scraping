@@ -10,12 +10,20 @@ logging.basicConfig(level=logging.INFO)
 
 # 2. Importamos nuestros módulos locales
 from app.api import mercado_libre_controller
+from app.api import compragamer_controller
+from app.api import fravega_controller
+from app.api import venex_controller
+from app.api import all_stores_controller
 
 # 3. Inicializamos FastAPI
 app = FastAPI(title="Microservicio Scraping+IA HardMatch")
 
 # 4. Registramos los routers de nuestros controladores
 app.include_router(mercado_libre_controller.router)
+app.include_router(compragamer_controller.router)
+app.include_router(fravega_controller.router)
+app.include_router(venex_controller.router)
+app.include_router(all_stores_controller.router)
 
 @app.get("/ping")
 async def health_check():

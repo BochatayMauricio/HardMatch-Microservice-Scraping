@@ -20,4 +20,4 @@ class ProductSchema(BaseModel):
     seller: Optional[str] = None
     brand: Optional[BrandSchema] = None
     category: Optional[str] = None
-    features: List[FeatureSchema] = []
+    features: List[FeatureSchema] = Field(default_factory=list)

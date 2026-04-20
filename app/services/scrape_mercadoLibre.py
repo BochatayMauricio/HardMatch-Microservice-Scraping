@@ -1,23 +1,25 @@
-import logging
 import asyncio
+import logging
 import random
-from typing import List, Dict
-import aiohttp
+import re
+from typing import Dict, List
+from urllib.parse import quote, urlsplit, urlunsplit
+
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-from urllib.parse import quote
-# Carga las variables del archivo .env al entorno de Python
-load_dotenv()
 
-DETAIL_CONCURRENCY = 5
-HEADER_ROTATION_EVERY = 8
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-]
+from app.services.http_client import ResilientScraperClient
 
+DETAIL_CONCURRENCY = 4
+PAGE_SLEEP_MIN_SECONDS = 1.8
+PAGE_SLEEP_MAX_SECONDS = 4.0
+ML_REFERER = "https://www.mercadolibre.com.ar/"
+
+BLOCK_HINTS = (
+    "captcha",
+    "verifica que no eres un robot",
+    "acceso denegado",
+    "are you human",
+)
 
 def _parse_product_features(html: str) -> List[Dict[str, str]]:
     """
@@ -52,37 +54,39 @@ def _parse_product_features(html: str) -> List[Dict[str, str]]:
     return features
 
 
+def _normalize_price(raw_value: str) -> str:
+    return re.sub(r"[^\d]", "", raw_value or "")
+
+
+def _clean_product_url(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+    parsed = urlsplit(raw_url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _looks_like_block_page(html: str) -> bool:
+    lowered = html.lower()
+    return any(hint in lowered for hint in BLOCK_HINTS)
+
+
 async def _fetch_product_features(
-    session: aiohttp.ClientSession,
+    client: ResilientScraperClient,
     url: str,
-    headers: Dict[str, str],
     semaphore: asyncio.Semaphore,
 ) -> List[Dict[str, str]]:
     if not url:
         return []
 
     async with semaphore:
-        try:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    logging.warning(f"Error {resp.status} al acceder a detalle: {url}")
-                    return []
-                html = await resp.text()
-        except Exception as e:
-            logging.error(f"Fallo en detalle de producto: {str(e)}")
+        html = await client.get_text(url, referer=ML_REFERER)
+        if not html:
+            return []
+        if _looks_like_block_page(html):
+            logging.warning("Se detecto pagina anti-bot en detalle de producto: %s", url)
             return []
 
     return _parse_product_features(html)
-
-
-def _build_headers(user_agent: str) -> Dict[str, str]:
-    return {
-        "User-Agent": user_agent,
-        "Accept-Language": "es-AR,es;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-        "Referer": "https://www.mercadolibre.com.ar/",
-    }
 
 
 async def scrape_mercadolibre(
@@ -98,43 +102,36 @@ async def scrape_mercadolibre(
     # Reemplazamos espacios por guiones y codificamos caracteres especiales
     query_formatted = quote(query.strip().replace(" ", "-"))
     base_url = f"https://listado.mercadolibre.com.ar/{query_formatted}"
-    
-    request_count = 0
-    current_headers = _build_headers(random.choice(USER_AGENTS))
-    
+
     items_crudos = []
-    
-    async with aiohttp.ClientSession() as session:
+
+    async with ResilientScraperClient(min_delay_seconds=1.2, max_delay_seconds=3.6) as client:
         semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
         for page in range(max_pages):
             offset = 1 + (page * 50)
             url = base_url if page == 0 else f"{base_url}_Desde_{offset}_NoIndex_True"
-            
-            logging.info(f"Scrapeando página {page + 1}/{max_pages} - URL: {url}")
-            
-            if request_count % HEADER_ROTATION_EVERY == 0:
-                current_headers = _build_headers(random.choice(USER_AGENTS))
 
-            try:
-                async with session.get(url, headers=current_headers) as resp:
-                    if resp.status != 200:
-                        logging.warning(f"Error {resp.status} al acceder a ML en la pág {page + 1}")
-                        break # Salimos del loop si ML nos bloquea o hay un error de red
-                    
-                    html = await resp.text()
-            except Exception as e:
-                logging.error(f"Fallo en la petición HTTP: {str(e)}")
+            logging.info(f"Scrapeando página {page + 1}/{max_pages} - URL: {url}")
+
+            html = await client.get_text(url, referer=ML_REFERER)
+            if not html:
+                logging.warning("No se pudo obtener la pagina %s de Mercado Libre", page + 1)
+                break
+
+            if _looks_like_block_page(html):
+                logging.warning("Mercado Libre devolvio una pagina anti-bot. Se corta el scraping.")
                 break
                 
             soup = BeautifulSoup(html, 'html.parser')
             # Selector de los contenedores de publicaciones
             results = soup.select('li.ui-search-layout__item')
-            
+
             if not results:
                 logging.info("No se encontraron más productos. Fin de la búsqueda.")
                 break
-                
+
             page_items: List[dict] = []
+            seen_page_urls = set()
             for el in results:
                 # 3. Extracción robusta de los datos
                 title_el = el.select_one('h2.ui-search-item__title') or el.select_one('.poly-component__title')
@@ -150,25 +147,34 @@ async def scrape_mercadolibre(
                 
                 if not title_el or not current_price_el or not url_el:
                     continue
-                    
-                precio_actual = current_price_el.get_text(strip=True).replace('.', '')
+
+                product_url = _clean_product_url(url_el.get('href', ''))
+                if not product_url or product_url in seen_page_urls:
+                    continue
+
+                seen_page_urls.add(product_url)
+
+                precio_actual = _normalize_price(current_price_el.get_text(strip=True))
+                if not precio_actual:
+                    continue
+
                 if previous_price_el:
-                    precio_anterior = previous_price_el.get_text(strip=True).replace('.', '')
+                    precio_anterior = _normalize_price(previous_price_el.get_text(strip=True)) or None
                 else:
                     precio_anterior = None
-                
+
                 page_items.append({
                     "titulo": title_el.get_text(strip=True),
                     "precio_actual": precio_actual,
                     "precio_anterior": precio_anterior,
                     "vendedor": seller_el.get_text(strip=True).replace('por ', '') if seller_el else "Mercado Libre",
                     "metodo_pago": installments_el.get_text(strip=True) if installments_el else "No especificado",
-                    "url": url_el.get('href', ''),
+                    "url": product_url,
                 })
 
             if include_details and page_items:
                 tasks = [
-                    _fetch_product_features(session, item["url"], current_headers, semaphore)
+                    _fetch_product_features(client, item["url"], semaphore)
                     for item in page_items
                 ]
                 features_list = await asyncio.gather(*tasks)
@@ -177,11 +183,10 @@ async def scrape_mercadolibre(
                         item["caracteristicas"] = features
 
             items_crudos.extend(page_items)
-            
+
             # 4. Rate Limiting (Pausa entre páginas para evitar bloqueos)
             if page < max_pages - 1:
-                await asyncio.sleep(2.5) 
-            request_count += 1
+                await asyncio.sleep(random.uniform(PAGE_SLEEP_MIN_SECONDS, PAGE_SLEEP_MAX_SECONDS))
 
     logging.info(f"Scraping finalizado. Se extrajeron {len(items_crudos)} productos crudos.")
 

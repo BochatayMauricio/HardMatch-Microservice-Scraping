@@ -16,7 +16,7 @@ router = APIRouter(
 async def do_scrape_and_normalize(
     q: str = Query("Productos", description="Termino de busqueda"),
     max_pages: int = Query(1, ge=1, le=10, description="Cantidad de paginas a scrapear"),
-    include_details: bool = Query(False, description="Extraer caracteristicas desde la pagina del producto"),
+    include_details: bool = Query(True, description="Extraer caracteristicas desde la pagina del producto"),
 ):
     """
     Endpoint maestro: Busca en ML, scrapea los resultados, 
