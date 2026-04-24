@@ -28,25 +28,20 @@ def _pick_best_seller_offer(product: Dict[str, Any]) -> Tuple[Optional[str], Opt
     if not items:
         return None, None
 
-    # Iteramos sobre todos los SKUs (ítems) del producto, porque a veces 
-    # el item[0] (ej: color rojo) no tiene stock, pero el item[1] (color azul) sí.
     for item in items:
         sellers = item.get("sellers") or []
         
         for seller in sellers:
             offer = seller.get("commertialOffer") or {}
             
-            # ATRIBUTOS CLAVE PARA DISTINGUIR PRODUCTOS REALMENTE DISPONIBLES
+            # ATRIBUTOS CLAVE: Confiamos en IsAvailable y el Precio. 
+            # Eliminamos la restricción estricta de AvailableQuantity > 0.
             is_available = offer.get("IsAvailable") is True
-            has_stock = int(offer.get("AvailableQuantity") or 0) > 0
             price = float(offer.get("Price") or 0)
             
-            # Solo si está explícitamente disponible, tiene al menos 1 en stock y cuesta más de 0
-            if is_available and has_stock and price > 0:
+            if is_available and price > 0:
                 return seller.get("sellerName"), offer
 
-    # Si recorrimos todos los items y vendedores y nadie tiene stock real, 
-    # devolvemos None. NO usamos un fallback.
     return None, None
 
 
@@ -98,26 +93,26 @@ def _extract_raw_features(product: Dict[str, Any]) -> List[Dict[str, str]]:
     return features
 
 def _is_accessory(product: Dict[str, Any], title: str) -> bool:
-    """Detecta si un producto es un accesorio usando las categorías de VTEX y su título."""
+    """Detecta si un producto es un accesorio usando título y categorías específicas."""
     title_lower = title.lower()
 
-    # 1. Filtro por frases obvias en el título (mata los que vimos en tu log)
+    # 1. Filtro por frases obvias en el título
     if "porta notebook" in title_lower or "portanotebook" in title_lower:
         return True
     
-    # Si arranca con estas palabras, 100% seguro no es una compu
-    if title_lower.startswith(("mochila", "funda", "maletin", "maletín", "bolso", "portafolio", "soporte", "base", "cargador")):
+    # 2. Si arranca con estas palabras, 100% seguro no es una compu
+    if title_lower.startswith(("mochila", "funda", "maletin", "maletín", "bolso", "portafolio", "soporte", "base", "cargador", "candado", "cable")):
         return True
 
-    # 2. Filtro profundo por el árbol de categorías de VTEX (El más seguro)
+    # 3. Filtro por categoría (MÁS SUAVE)
+    # Quitamos la palabra "accesorios" porque Frávega la usa como categoría padre ("Computación y Accesorios")
     categories = product.get("categories") or []
     for cat in categories:
         cat_lower = str(cat).lower()
-        if any(keyword in cat_lower for keyword in ["accesorios", "mochilas", "fundas", "indumentaria", "cables", "conectividad"]):
+        if any(keyword in cat_lower for keyword in ["mochilas", "fundas", "indumentaria", "cables"]):
             return True
 
     return False
-
 async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
     """Scrapea Fravega usando su API de catalogo para evitar bloqueos por HTML dinamico."""
     encoded_query = quote_plus(query.strip())
@@ -160,15 +155,13 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
                 title = str(product.get("productName") or "").strip()
                 product_url = str(product.get("link") or "").strip()
 
-                # --- NUEVOS LOGS AQUÍ ---
                 logging.info("PROCESANDO: %s - URL: %s", title, product_url)
-                # ------------------------
 
-                if not title or not product_url or not product_url.endswith("/p"):
-                    logging.warning("SALTEADO: %s - URL invalida o malformada (%s)", title, product_url)
+                # CORRECCIÓN: Eliminamos el .endswith("/p") que era demasiado estricto
+                if not title or not product_url:
+                    logging.warning("SALTEADO: %s - URL invalida o vacia", title)
                     continue
 
-                # Validación 2: EL NUEVO FILTRO DE ACCESORIOS
                 if _is_accessory(product, title):
                     logging.info("DESCARTADO (Es Accesorio): %s", title)
                     continue
