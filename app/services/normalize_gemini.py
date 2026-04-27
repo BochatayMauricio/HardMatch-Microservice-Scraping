@@ -89,6 +89,7 @@ async def process_batch(batch_items: List[dict], max_retries: int = 3) -> List[P
       {{
         "name": "Nombre limpio y profesional del producto",
         "urlAccess": "La misma url cruda que te envié",
+                "imageUrl": "URL pública de la imagen principal del producto, si está disponible",
         "price": 120000.00,
         "regularPrice": 150000.00,
         "category": "Categoría general deducida (ej. Notebooks, Monitores, Placas de Video)",
@@ -109,11 +110,12 @@ async def process_batch(batch_items: List[dict], max_retries: int = 3) -> List[P
     Reglas estrictas:
     1. 'price' es el precio final ('precio_actual'). 'regularPrice' es el precio original sin descuento ('precio_anterior'). Si el producto no tiene descuento, omite 'regularPrice' (null). Ambos deben ser de tipo numérico (float).
     2. Infiere la 'category' y la marca ('brand.name') a partir del título del producto.
-    3. Extrae características técnicas en el arreglo 'features'.
-    4. NO incluyas formato Markdown (sin ```json), solo devuelve texto de JSON puro.
-    5. 'seller' es el vendedor directo.
-    6. Feature 'metodo_pago' debe describir las opciones de pago disponibles (ej. "Contado", "6 cuotas sin interés - Visa", etc.)
-    7. Si no puedes inferir alguna información, deja el campo como null o vacío, pero siempre devuelve un JSON válido que respete el esquema.
+    3. Si puedes inferir o conservar la URL de la imagen principal, devuélvela en 'imageUrl'.
+    4. Extrae características técnicas en el arreglo 'features'.
+    5. NO incluyas formato Markdown (sin ```json), solo devuelve texto de JSON puro.
+    6. 'seller' es el vendedor directo.
+    7. Feature 'metodo_pago' debe describir las opciones de pago disponibles (ej. "Contado", "6 cuotas sin interés - Visa", etc.)
+    8. Si no puedes inferir alguna información, deja el campo como null o vacío, pero siempre devuelve un JSON válido que respete el esquema.
     
     Datos crudos a procesar:
     {json.dumps(batch_items, ensure_ascii=False)}

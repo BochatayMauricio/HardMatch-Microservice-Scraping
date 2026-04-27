@@ -3,7 +3,7 @@ import re
 import time
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 from app.services.http_client import ResilientScraperClient
 
@@ -108,6 +108,42 @@ def _build_product_url(name: str, product_id: int, query: str, page: int) -> str
     slug = _slugify_product_name(name)
     encoded_query = quote_plus(query.strip())
     return f"{BASE_URL}/producto/{slug}_{product_id}?criterio={encoded_query}&page={page}"
+
+
+def _extract_product_image(product: Dict[str, Any]) -> Optional[str]:
+    candidate_keys = (
+        "imagen",
+        "image",
+        "imageUrl",
+        "image_url",
+        "foto",
+        "thumbnail",
+        "thumb",
+        "urlImagen",
+        "url_imagen",
+    )
+
+    for key in candidate_keys:
+        value = product.get(key)
+        if isinstance(value, str) and value.strip():
+            return urljoin(BASE_URL, value.strip())
+
+    nested_keys = ("images", "imagenes", "fotos")
+    for key in nested_keys:
+        nested_values = product.get(key) or []
+        if not isinstance(nested_values, list):
+            continue
+
+        for nested in nested_values:
+            if not isinstance(nested, dict):
+                continue
+
+            for image_key in ("url", "src", "imageUrl", "image_url", "fileUrl"):
+                value = nested.get(image_key)
+                if isinstance(value, str) and value.strip():
+                    return urljoin(BASE_URL, value.strip())
+
+    return None
 
 
 def _extract_raw_features(detail_payload: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -257,6 +293,7 @@ async def scrape_compra_gamer(query: str, max_pages: int = 1) -> List[dict]:
         current_price = str(int(round(current_price_float)))
         previous_price = _resolve_previous_price(product, current_price_float)
         page = (idx // PAGE_SIZE) + 1
+        image_url = _extract_product_image(product)
 
         all_items.append(
             {
@@ -266,6 +303,7 @@ async def scrape_compra_gamer(query: str, max_pages: int = 1) -> List[dict]:
                 "vendedor": "Compra Gamer",
                 "metodo_pago": _build_payment_description(product.get("precios_cuotas")),
                 "url": _build_product_url(title, product_id, query, page),
+                "url_imagen": image_url,
                 "caracteristicas": _extract_raw_features(details_by_id.get(product_id)),
             }
         )

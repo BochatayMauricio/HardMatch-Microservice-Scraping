@@ -95,6 +95,37 @@ def _normalize_title(raw_text: str, fallback_url: str) -> str:
     return _title_from_url(fallback_url)
 
 
+def _extract_image_url(anchor: BeautifulSoup) -> str:
+    if not anchor:
+        return ""
+
+    candidates = [anchor]
+    if anchor.parent:
+        candidates.append(anchor.parent)
+    if anchor.parent and anchor.parent.parent:
+        candidates.append(anchor.parent.parent)
+
+    for node in candidates:
+        image = node.select_one("img") if getattr(node, "select_one", None) else None
+        if not image:
+            continue
+
+        for key in ("src", "data-src", "data-lazy-src", "data-original", "srcset"):
+            value = image.get(key)
+            if not value:
+                continue
+
+            if key == "srcset":
+                first_candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
+                if first_candidate:
+                    return first_candidate
+
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    return ""
+
+
 def _extract_prices_from_context(context: str) -> List[str]:
     prices: List[str] = []
     for raw_price in PRICE_PATTERN.findall(context):
@@ -135,6 +166,7 @@ def _extract_items_from_html(html: str) -> List[dict]:
         title = _normalize_title(anchor.get_text(" ", strip=True), product_url)
         current_price = prices[0]
         previous_price = prices[1] if len(prices) > 1 else None
+        image_url = _extract_image_url(anchor)
 
         seen_urls.add(product_url)
         items.append(
@@ -145,6 +177,7 @@ def _extract_items_from_html(html: str) -> List[dict]:
                 "vendedor": "Venex",
                 "metodo_pago": "No especificado",
                 "url": product_url,
+                "url_imagen": image_url or None,
             }
         )
 

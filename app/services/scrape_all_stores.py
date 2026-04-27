@@ -15,7 +15,6 @@ STORE_NAMES: Dict[str, str] = {
     "venex": "Venex",
 }
 
-
 async def scrape_all_stores_parallel(
     query: str,
     max_pages: int = 1,

@@ -356,6 +356,10 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             _first_present(item, ["titulo", "title", "name", "productName"]) or ""
         ).strip()
         url = str(_first_present(item, ["url", "urlAccess", "link"]) or "").strip()
+        image_url = str(
+            _first_present(item, ["url_imagen", "image_url", "imageUrl", "image", "thumbnail"])
+            or ""
+        ).strip()
         if not title:
             title = _title_from_url(url)
 
@@ -396,6 +400,7 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             ProductSchema(
                 name=title or "Sin nombre",
                 urlAccess=url,
+                imageUrl=image_url or None,
                 price=price or 0.0,
                 regularPrice=regular_price,
                 seller=seller,

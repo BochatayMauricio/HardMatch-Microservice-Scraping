@@ -15,6 +15,7 @@ class ProductSchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     name: str
     url_access: str = Field(..., alias="urlAccess")
+    image_url: Optional[str] = Field(default=None, alias="imageUrl")
     price: float
     regular_price: Optional[float] = Field(default=None, alias="regularPrice")
     seller: Optional[str] = None

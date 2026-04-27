@@ -65,6 +65,27 @@ def _clean_product_url(raw_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
+def _extract_image_url(element) -> str:
+    image = element.select_one("img") if element else None
+    if not image:
+        return ""
+
+    for key in ("src", "data-src", "data-lazy-src", "data-zoom", "srcset"):
+        value = image.get(key)
+        if not value:
+            continue
+
+        if key == "srcset":
+            first_candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
+            if first_candidate:
+                return first_candidate
+
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return ""
+
+
 def _looks_like_block_page(html: str) -> bool:
     lowered = html.lower()
     return any(hint in lowered for hint in BLOCK_HINTS)
@@ -163,6 +184,8 @@ async def scrape_mercadolibre(
                 else:
                     precio_anterior = None
 
+                image_url = _extract_image_url(el)
+
                 page_items.append({
                     "titulo": title_el.get_text(strip=True),
                     "precio_actual": precio_actual,
@@ -170,6 +193,7 @@ async def scrape_mercadolibre(
                     "vendedor": seller_el.get_text(strip=True).replace('por ', '') if seller_el else "Mercado Libre",
                     "metodo_pago": installments_el.get_text(strip=True) if installments_el else "No especificado",
                     "url": product_url,
+                    "url_imagen": image_url or None,
                 })
 
             if include_details and page_items:

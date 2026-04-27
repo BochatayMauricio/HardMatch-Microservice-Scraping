@@ -3,7 +3,7 @@ import logging
 import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 from app.services.http_client import ResilientScraperClient
 
@@ -64,6 +64,43 @@ def _build_payment_description(offer: Optional[Dict[str, Any]]) -> str:
 
     max_installments = max(int(item.get("NumberOfInstallments") or 0) for item in installments)
     return f"Hasta {max_installments} cuotas"
+
+
+def _extract_image_url(product: Dict[str, Any]) -> Optional[str]:
+    candidate_keys = ("imageUrl", "image_url", "image", "thumbnail", "thumb", "src")
+
+    for key in candidate_keys:
+        value = product.get(key)
+        if isinstance(value, str) and value.strip():
+            return urljoin(BASE_URL, value.strip())
+
+    items = product.get("items") or []
+    if not isinstance(items, list):
+        return None
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        for key in candidate_keys:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return urljoin(BASE_URL, value.strip())
+
+        images = item.get("images") or []
+        if not isinstance(images, list):
+            continue
+
+        for image in images:
+            if not isinstance(image, dict):
+                continue
+
+            for key in ("imageUrl", "image_url", "url", "src", "fileUrl"):
+                value = image.get(key)
+                if isinstance(value, str) and value.strip():
+                    return urljoin(BASE_URL, value.strip())
+
+    return None
 
 def _extract_raw_features(product: Dict[str, Any]) -> List[Dict[str, str]]:
     features: List[Dict[str, str]] = []
@@ -181,6 +218,7 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
 
                 raw_features = _extract_raw_features(product)
                 brand = str(product.get("brand") or "").strip()
+                image_url = _extract_image_url(product)
                 if brand:
                     raw_features.append({"keyword": "marca_api", "value": brand})
 
@@ -192,6 +230,7 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
                         "vendedor": seller_name or "Fravega",
                         "metodo_pago": _build_payment_description(offer),
                         "url": product_url,
+                        "url_imagen": image_url,
                         "caracteristicas": raw_features,
                     }
                 )
