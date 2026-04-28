@@ -295,6 +295,12 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
         return []
 
     normalized: List[ProductSchema] = []
+    total_products = 0
+    total_features = 0
+    zero_feature_products = 0
+    one_feature_products = 0
+    store_feature_stats: Dict[str, Dict[str, int]] = {}
+    sample_logged = 0
     for item in items_crudos:
         if not isinstance(item, dict):
             continue
@@ -367,6 +373,45 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             raw_features = []
 
         features = _extract_features(metodo_pago, raw_features)
+        if sample_logged < 2:
+            store_name = _resolve_store_name(item)
+            logging.info(
+                "Features sample tienda='%s' titulo='%s': %s",
+                store_name,
+                title or "Sin nombre",
+                [
+                    {"keyword": feature.keyword, "value": feature.value}
+                    for feature in features
+                ],
+            )
+            sample_logged += 1
+        total_products += 1
+        total_features += len(features)
+
+        if len(features) == 0:
+            zero_feature_products += 1
+        elif len(features) == 1:
+            one_feature_products += 1
+
+        store_name = _resolve_store_name(item)
+        store_stats = store_feature_stats.setdefault(
+            store_name,
+            {"total": 0, "low": 0, "zero": 0, "one": 0},
+        )
+        store_stats["total"] += 1
+        if len(features) <= 1:
+            store_stats["low"] += 1
+            if len(features) == 0:
+                store_stats["zero"] += 1
+            else:
+                store_stats["one"] += 1
+            logging.info(
+                "Features bajas en tienda '%s' para '%s': raw=%s, normalizadas=%s",
+                store_name,
+                title or "Sin nombre",
+                len(raw_features),
+                len(features),
+            )
 
         normalized.append(
             ProductSchema(
@@ -382,5 +427,23 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             )
         )
 
-    logging.info(f"Normalizacion local completada. Total: {len(normalized)} productos.")
+    average_features = (total_features / total_products) if total_products else 0.0
+    logging.info(
+        "Normalizacion local completada. Total=%s, features_promedio=%.2f, sin_features=%s, con_1_feature=%s",
+        total_products,
+        average_features,
+        zero_feature_products,
+        one_feature_products,
+    )
+
+    for store_name, stats in store_feature_stats.items():
+        if stats["low"]:
+            logging.warning(
+                "Normalizacion: tienda '%s' con features bajas=%s (0=%s, 1=%s) de %s",
+                store_name,
+                stats["low"],
+                stats["zero"],
+                stats["one"],
+                stats["total"],
+            )
     return normalized
