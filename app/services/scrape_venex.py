@@ -18,6 +18,7 @@ DETAIL_CONCURRENCY = 5
 
 PRICE_PATTERN = re.compile(r"\$\s*([\d\.,]+)")
 MULTISPACE_PATTERN = re.compile(r"\s+")
+STYLE_URL_PATTERN = re.compile(r"url\((['\"]?)(.*?)\1\)")
 DETAIL_PAIR_PATTERN = re.compile(
     r"([A-Za-z0-9\s\-_/\.,ÁÉÍÓÚáéíóúÑñ]{2,45}):\s*([^:]{1,140})(?=\s+[A-Za-z0-9\s\-_/\.,ÁÉÍÓÚáéíóúÑñ]{2,45}:|$)"
 )
@@ -62,6 +63,17 @@ def _canonical_url(raw_href: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
+def _normalize_image_url(raw_value: str) -> str:
+    value = (raw_value or "").strip()
+    if not value:
+        return ""
+
+    if value.startswith("//"):
+        return f"https:{value}"
+
+    return urljoin(BASE_URL, value)
+
+
 def _is_product_url(url: str) -> bool:
     if not url:
         return False
@@ -95,6 +107,17 @@ def _normalize_title(raw_text: str, fallback_url: str) -> str:
     return _title_from_url(fallback_url)
 
 
+def _extract_url_from_style(style_value: str) -> str:
+    if not style_value:
+        return ""
+
+    match = STYLE_URL_PATTERN.search(style_value)
+    if not match:
+        return ""
+
+    return match.group(2).strip()
+
+
 def _extract_image_url(anchor: BeautifulSoup) -> str:
     if not anchor:
         return ""
@@ -105,23 +128,54 @@ def _extract_image_url(anchor: BeautifulSoup) -> str:
     if anchor.parent and anchor.parent.parent:
         candidates.append(anchor.parent.parent)
 
+    candidate_keys = (
+        "data-srcset",
+        "data-lazy-srcset",
+        "srcset",
+        "data-src",
+        "data-lazy-src",
+        "data-lazy",
+        "data-original",
+        "src",
+    )
+
     for node in candidates:
-        image = node.select_one("img") if getattr(node, "select_one", None) else None
-        if not image:
+        if not getattr(node, "select_one", None):
             continue
 
-        for key in ("src", "data-src", "data-lazy-src", "data-original", "srcset"):
-            value = image.get(key)
-            if not value:
-                continue
+        image = node.select_one("img")
+        if image:
+            for key in candidate_keys:
+                value = image.get(key)
+                if not value:
+                    continue
 
-            if key == "srcset":
-                first_candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
-                if first_candidate:
-                    return first_candidate
+                if "srcset" in key:
+                    first_candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
+                    if first_candidate:
+                        normalized = _normalize_image_url(first_candidate)
+                        if normalized:
+                            return normalized
 
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+                if isinstance(value, str) and value.strip():
+                    normalized = _normalize_image_url(value)
+                    if normalized:
+                        return normalized
+
+        style_source = node.get("style")
+        if style_source:
+            style_url = _extract_url_from_style(style_source)
+            if style_url:
+                normalized = _normalize_image_url(style_url)
+                if normalized:
+                    return normalized
+
+        for style_node in node.select("[style]"):
+            style_url = _extract_url_from_style(style_node.get("style", ""))
+            if style_url:
+                normalized = _normalize_image_url(style_url)
+                if normalized:
+                    return normalized
 
     return ""
 
@@ -288,6 +342,7 @@ async def scrape_venex(query: str, max_pages: int = 1) -> List[dict]:
     encoded_query = quote_plus(query.strip())
     all_items: List[dict] = []
     seen_urls = set()
+    discarded_no_image = 0
 
     async with ResilientScraperClient(min_delay_seconds=1.2, max_delay_seconds=2.6) as client:
         detail_semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
@@ -304,6 +359,19 @@ async def scrape_venex(query: str, max_pages: int = 1) -> List[dict]:
             if not page_items:
                 logging.info("Venex: pagina %s sin resultados parseables", page)
                 break
+
+            filtered_items: List[dict] = []
+            for item in page_items:
+                if not item.get("url_imagen"):
+                    discarded_no_image += 1
+                    continue
+                filtered_items.append(item)
+
+            if not filtered_items:
+                logging.info("Venex: pagina %s sin resultados con imagen", page)
+                break
+
+            page_items = filtered_items
 
             added = 0
             for item in page_items:
@@ -333,4 +401,6 @@ async def scrape_venex(query: str, max_pages: int = 1) -> List[dict]:
                 await asyncio.sleep(random.uniform(PAGE_SLEEP_MIN_SECONDS, PAGE_SLEEP_MAX_SECONDS))
 
     logging.info("Venex: se extrajeron %s productos crudos", len(all_items))
+    if discarded_no_image:
+        logging.warning("Venex: descartados sin imagen=%s", discarded_no_image)
     return all_items
