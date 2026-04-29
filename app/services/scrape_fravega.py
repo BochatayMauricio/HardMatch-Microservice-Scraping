@@ -155,6 +155,7 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
     encoded_query = quote_plus(query.strip())
     all_items: List[dict] = []
     seen_urls = set()
+    discarded_no_image = 0
 
     async with ResilientScraperClient(min_delay_seconds=1.0, max_delay_seconds=2.3) as client:
         for page in range(max_pages):
@@ -219,6 +220,9 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
                 raw_features = _extract_raw_features(product)
                 brand = str(product.get("brand") or "").strip()
                 image_url = _extract_image_url(product)
+                if not image_url:
+                    discarded_no_image += 1
+                    continue
                 if brand:
                     raw_features.append({"keyword": "marca_api", "value": brand})
 
@@ -256,4 +260,6 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
                 await asyncio.sleep(random.uniform(PAGE_SLEEP_MIN_SECONDS, PAGE_SLEEP_MAX_SECONDS))
 
     logging.info("Fravega: se extrajeron %s productos crudos", len(all_items))
+    if discarded_no_image:
+        logging.warning("Fravega: descartados sin imagen=%s", discarded_no_image)
     return all_items

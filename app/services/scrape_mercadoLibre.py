@@ -3,7 +3,7 @@ import logging
 import random
 import re
 from typing import Dict, List
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -65,23 +65,53 @@ def _clean_product_url(raw_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
+def _normalize_image_url(raw_value: str) -> str:
+    value = (raw_value or "").strip()
+    if not value:
+        return ""
+
+    if value.startswith("//"):
+        return f"https:{value}"
+
+    if value.startswith("/"):
+        return urljoin(ML_REFERER, value)
+
+    return value
+
+
 def _extract_image_url(element) -> str:
     image = element.select_one("img") if element else None
     if not image:
         return ""
 
-    for key in ("src", "data-src", "data-lazy-src", "data-zoom", "srcset"):
+    candidate_keys = (
+        "data-srcset",
+        "data-lazy-srcset",
+        "srcset",
+        "data-src",
+        "data-lazy-src",
+        "data-lazy",
+        "data-original",
+        "data-zoom",
+        "src",
+    )
+
+    for key in candidate_keys:
         value = image.get(key)
         if not value:
             continue
 
-        if key == "srcset":
+        if "srcset" in key:
             first_candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
             if first_candidate:
-                return first_candidate
+                normalized = _normalize_image_url(first_candidate)
+                if normalized:
+                    return normalized
 
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            normalized = _normalize_image_url(value)
+            if normalized:
+                return normalized
 
     return ""
 
@@ -128,6 +158,7 @@ async def scrape_mercadolibre(
 
     async with ResilientScraperClient(min_delay_seconds=1.2, max_delay_seconds=3.6) as client:
         semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
+        discarded_no_image = 0
         for page in range(max_pages):
             offset = 1 + (page * 50)
             url = base_url if page == 0 else f"{base_url}_Desde_{offset}_NoIndex_True"
@@ -185,6 +216,9 @@ async def scrape_mercadolibre(
                     precio_anterior = None
 
                 image_url = _extract_image_url(el)
+                if not image_url:
+                    discarded_no_image += 1
+                    continue
 
                 page_items.append({
                     "titulo": title_el.get_text(strip=True),
@@ -213,5 +247,7 @@ async def scrape_mercadolibre(
                 await asyncio.sleep(random.uniform(PAGE_SLEEP_MIN_SECONDS, PAGE_SLEEP_MAX_SECONDS))
 
     logging.info(f"Scraping finalizado. Se extrajeron {len(items_crudos)} productos crudos.")
+    if discarded_no_image:
+        logging.warning("Mercado Libre: descartados sin imagen=%s", discarded_no_image)
 
     return items_crudos

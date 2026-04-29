@@ -92,6 +92,9 @@ RAW_KEYWORD_ALIASES: Dict[str, str] = {
     "memoria_ram": "memoria_ram",
 }
 
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg", ".avif")
+PLACEHOLDER_HOSTS = {"placehold.co", "via.placeholder.com"}
+
 
 def _first_present(item: Dict[str, Any], keys: List[str]) -> Optional[Any]:
     for key in keys:
@@ -166,6 +169,66 @@ def _to_float(value: Optional[Any]) -> Optional[float]:
         return None
 
 
+def _looks_like_placeholder_url(value: str) -> bool:
+    if not value:
+        return False
+
+    parsed = urlsplit(value)
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+
+    if host in PLACEHOLDER_HOSTS or host.endswith(".placehold.co"):
+        return True
+    if "placeholder" in host or "placehold" in host:
+        return True
+    if "placeholder" in path or "placehold" in path:
+        return True
+
+    return False
+
+
+def _looks_like_image_url(value: str) -> bool:
+    if not value:
+        return False
+
+    parsed = urlsplit(value)
+    path = parsed.path.lower()
+    if any(path.endswith(ext) for ext in IMAGE_EXTENSIONS):
+        return True
+
+    if _looks_like_placeholder_url(value):
+        return True
+
+    if re.search(r"/\d{2,4}x\d{2,4}(/|$)", path) and "text=" in parsed.query.lower():
+        return True
+
+    return False
+
+
+def _pick_first_non_image_url(candidates: List[str]) -> str:
+    for candidate in candidates:
+        value = candidate.strip()
+        if value and not _looks_like_image_url(value):
+            return value
+    return ""
+
+
+def _pick_first_image_url(candidates: List[str]) -> str:
+    for candidate in candidates:
+        value = candidate.strip()
+        if value and _looks_like_image_url(value) and not _looks_like_placeholder_url(value):
+            return value
+    return ""
+
+
+def _resolve_store_name(item: Dict[str, Any]) -> str:
+    for key in ("tienda", "vendedor", "seller", "sellerName"):
+        raw_value = item.get(key)
+        if isinstance(raw_value, str) and raw_value.strip():
+            return raw_value.strip()
+    return "desconocida"
+
+
 def _extract_brand(title: str) -> Optional[BrandSchema]:
     lowered = title.lower()
     for key, name in BRAND_KEYWORDS.items():
@@ -195,122 +258,6 @@ def _add_feature(features: List[FeatureSchema], keyword: str, value: Optional[st
         ):
             return
         features.append(FeatureSchema(keyword=normalized_keyword, value=normalized_value))
-
-
-# def _extract_features(
-#     title: str,
-#     metodo_pago: Optional[str],
-#     raw_features: Optional[List[dict]] = None,
-# ) -> List[FeatureSchema]:
-#     features: List[FeatureSchema] = []
-#     match = PROCESSOR_PATTERN.search(title)
-#     _add_feature(features, "procesador", match.group(1) if match else None)
-
-#     match = RAM_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "memoria_ram", f"{match.group(1)}GB")
-#     else:
-#         match = RAM_FALLBACK_PATTERN.search(title)
-#         _add_feature(features, "memoria_ram", f"{match.group(1)}GB" if match else None)
-
-#     match = STORAGE_PATTERN.search(title)
-#     if match:
-#         size = match.group(1)
-#         unit = match.group(2).upper()
-#         kind = (match.group(3) or "").upper().strip()
-#         storage_value = f"{size}{unit} {kind}".strip()
-#         _add_feature(features, "almacenamiento", storage_value)
-
-#     match = GPU_PATTERN.search(title)
-#     _add_feature(features, "placa_video", match.group(1) if match else None)
-
-#     match = VRAM_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "vram", f"{match.group(1)}GB")
-
-#     match = RESOLUTION_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "resolucion", match.group(1).upper())
-
-#     match = REFRESH_RATE_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "frecuencia", f"{match.group(1)}Hz")
-
-#     match = SCREEN_SIZE_PATTERN.search(title)
-#     if match:
-#         pulgadas = match.group(1).replace(",", ".")
-#         _add_feature(features, "pulgadas", pulgadas)
-
-#     match = PANEL_PATTERN.search(title)
-#     _add_feature(features, "panel", match.group(1).upper() if match else None)
-
-#     match = STORAGE_TYPE_PATTERN.search(title)
-#     _add_feature(features, "tipo_almacenamiento", match.group(1).upper() if match else None)
-
-#     match = CONNECTION_PATTERN.search(title)
-#     _add_feature(features, "conexion", match.group(1).upper() if match else None)
-
-#     match = DPI_PATTERN.search(title)
-#     _add_feature(features, "dpi", match.group(1) if match else None)
-
-#     match = SWITCH_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "switch", match.group(1).upper())
-
-#     match = LAYOUT_PATTERN.search(title)
-#     _add_feature(features, "layout", match.group(1).upper() if match else None)
-
-#     match = MIC_PATTERN.search(title)
-#     if match:
-#         _add_feature(features, "microfono", "Si")
-
-#     match = KEYBOARD_LANG_PATTERN.search(title)
-#     if match:
-#         lang = match.group(1).lower()
-#         if lang in {"espanol", "español", "spanish"}:
-#             value = "ES"
-#         elif lang in {"ingles", "inglés", "english"}:
-#             value = "EN"
-#         elif lang in {"portugues", "portugués", "pt", "br"}:
-#             value = "PT"
-#         else:
-#             value = lang.upper()
-#         _add_feature(features, "idioma_teclado", value)
-
-#     match = DIMENSIONS_PATTERN.search(title)
-#     if match:
-#         x = match.group(1).replace(",", ".")
-#         y = match.group(2).replace(",", ".")
-#         z = match.group(3).replace(",", ".")
-#         unit = match.group(4).lower()
-#         _add_feature(features, "dimensiones", f"{x}x{y}x{z} {unit}")
-
-#     match = OS_PATTERN.search(title)
-#     if match:
-#         os_name = match.group(1).lower().replace(" ", "")
-#         if os_name == "win11":
-#             os_name = "windows11"
-#         elif os_name == "win10":
-#             os_name = "windows10"
-#         _add_feature(features, "sistema_operativo", os_name)
-
-#     if raw_features:
-#         for raw in raw_features:
-#             if not isinstance(raw, dict):
-#                 continue
-
-#             keyword_raw = str(raw.get("keyword") or raw.get("name") or "").strip()
-#             value = str(raw.get("value") or raw.get("valor") or "").strip()
-#             if not keyword_raw or not value:
-#                 continue
-
-#             keyword = _normalize_keyword(keyword_raw)
-#             _add_feature(features, keyword, value)
-
-#     if metodo_pago and metodo_pago.strip() and metodo_pago != "No especificado":
-#         _add_feature(features, "metodo_pago", metodo_pago.strip())
-
-#     return features
 
 def _extract_features(
     metodo_pago: Optional[str],
@@ -348,6 +295,12 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
         return []
 
     normalized: List[ProductSchema] = []
+    total_products = 0
+    total_features = 0
+    zero_feature_products = 0
+    one_feature_products = 0
+    store_feature_stats: Dict[str, Dict[str, int]] = {}
+    sample_logged = 0
     for item in items_crudos:
         if not isinstance(item, dict):
             continue
@@ -355,11 +308,36 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
         title = str(
             _first_present(item, ["titulo", "title", "name", "productName"]) or ""
         ).strip()
-        url = str(_first_present(item, ["url", "urlAccess", "link"]) or "").strip()
+        url_candidates = [
+            str(item.get("url") or "").strip(),
+            str(item.get("link") or "").strip(),
+            str(item.get("urlAccess") or "").strip(),
+            str(item.get("permalink") or "").strip(),
+            str(item.get("product_url") or "").strip(),
+            str(item.get("productUrl") or "").strip(),
+            str(item.get("product_link") or "").strip(),
+        ]
+        url_candidates = [candidate for candidate in url_candidates if candidate]
+
+        url = _pick_first_non_image_url(url_candidates)
         image_url = str(
             _first_present(item, ["url_imagen", "image_url", "imageUrl", "image", "thumbnail"])
             or ""
         ).strip()
+        if image_url and _looks_like_placeholder_url(image_url):
+            image_url = ""
+        if not image_url and url_candidates:
+            image_url = _pick_first_image_url(url_candidates)
+
+        if not url:
+            store_name = _resolve_store_name(item)
+            logging.warning(
+                "URL de acceso invalida en tienda '%s' para '%s'. Candidatos=%s",
+                store_name,
+                title or "Sin nombre",
+                url_candidates,
+            )
+            continue
         if not title:
             title = _title_from_url(url)
 
@@ -395,6 +373,45 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             raw_features = []
 
         features = _extract_features(metodo_pago, raw_features)
+        if sample_logged < 2:
+            store_name = _resolve_store_name(item)
+            logging.info(
+                "Features sample tienda='%s' titulo='%s': %s",
+                store_name,
+                title or "Sin nombre",
+                [
+                    {"keyword": feature.keyword, "value": feature.value}
+                    for feature in features
+                ],
+            )
+            sample_logged += 1
+        total_products += 1
+        total_features += len(features)
+
+        if len(features) == 0:
+            zero_feature_products += 1
+        elif len(features) == 1:
+            one_feature_products += 1
+
+        store_name = _resolve_store_name(item)
+        store_stats = store_feature_stats.setdefault(
+            store_name,
+            {"total": 0, "low": 0, "zero": 0, "one": 0},
+        )
+        store_stats["total"] += 1
+        if len(features) <= 1:
+            store_stats["low"] += 1
+            if len(features) == 0:
+                store_stats["zero"] += 1
+            else:
+                store_stats["one"] += 1
+            logging.info(
+                "Features bajas en tienda '%s' para '%s': raw=%s, normalizadas=%s",
+                store_name,
+                title or "Sin nombre",
+                len(raw_features),
+                len(features),
+            )
 
         normalized.append(
             ProductSchema(
@@ -410,5 +427,23 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
             )
         )
 
-    logging.info(f"Normalizacion local completada. Total: {len(normalized)} productos.")
+    average_features = (total_features / total_products) if total_products else 0.0
+    logging.info(
+        "Normalizacion local completada. Total=%s, features_promedio=%.2f, sin_features=%s, con_1_feature=%s",
+        total_products,
+        average_features,
+        zero_feature_products,
+        one_feature_products,
+    )
+
+    for store_name, stats in store_feature_stats.items():
+        if stats["low"]:
+            logging.warning(
+                "Normalizacion: tienda '%s' con features bajas=%s (0=%s, 1=%s) de %s",
+                store_name,
+                stats["low"],
+                stats["zero"],
+                stats["one"],
+                stats["total"],
+            )
     return normalized
