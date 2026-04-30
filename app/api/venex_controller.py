@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Query
 
+from app.api.query_normalizer import normalize_query
 from app.schemas.product_schema import ProductSchema
 from app.services.normalize_data import normalize_data
 from app.services.scrape_venex import scrape_venex
@@ -16,9 +17,12 @@ async def scrape_and_normalize_venex(
     max_pages: int = Query(1, ge=1, le=10, description="Cantidad de paginas a scrapear"),
 ):
     """Scrapea Venex por busqueda paginada y normaliza el payload de salida."""
-    logging.info("Iniciando scraping de Venex para query: %s", q)
+    normalized_query = normalize_query(q)
+    if normalized_query != q:
+        logging.info("Query normalizada: '%s' -> '%s'", q, normalized_query)
+    logging.info("Iniciando scraping de Venex para query: %s", normalized_query)
 
-    raw_items = await scrape_venex(query=q, max_pages=max_pages)
+    raw_items = await scrape_venex(query=normalized_query, max_pages=max_pages)
     if not raw_items:
         return []
 

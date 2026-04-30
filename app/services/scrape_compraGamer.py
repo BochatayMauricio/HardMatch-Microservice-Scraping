@@ -4,7 +4,7 @@ import re
 import time
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -13,6 +13,8 @@ from app.services.http_client import ResilientScraperClient
 BASE_URL = "https://compragamer.com"
 CATALOG_URL = "https://static.compragamer.com/productos"
 DETAILS_URL = "https://static.compragamer.com/productos_caracteristicas"
+IMAGES_BASE_URL = "https://imagenes.compragamer.com/"
+STATIC_BASE_URL = "https://static.compragamer.com/"
 CACHE_TTL_SECONDS = 900
 PAGE_SIZE = 24
 DETAIL_IMAGE_CONCURRENCY = 4
@@ -20,7 +22,10 @@ MAX_DETAIL_IMAGE_FETCH = 18
 
 NON_WORD_PATTERN = re.compile(r"[^a-z0-9]+")
 MULTISPACE_PATTERN = re.compile(r"\s+")
-IMAGE_URL_PATTERN = re.compile(r"https?://imagenes\.compragamer\.com/[^\s\"']+")
+IMAGE_URL_PATTERN = re.compile(r"https?://(?:imagenes|static)\.compragamer\.com/[^\s\"']+")
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg", ".avif")
+LOGO_PATH_HINTS = ("logo", "favicon", "sprite", "meta_banner")
+PRODUCT_PATH_HINTS = ("/productos/", "/producto/", "/products/", "/product/")
 
 _catalog_cache: Optional[List[Dict[str, Any]]] = None
 _details_by_product_id_cache: Dict[int, Dict[str, Any]] = {}
@@ -164,11 +169,111 @@ def _normalize_image_url(raw_value: Optional[str]) -> Optional[str]:
         return value
 
     value = value.lstrip("/")
-    static_base = "https://static.compragamer.com/"
-    if value.startswith("productos/") or value.startswith("imagenes/") or value.startswith("uploads/"):
-        return urljoin(static_base, value)
+    if value.startswith("productos/") or value.startswith("imagenes/"):
+        return urljoin(IMAGES_BASE_URL, value)
+    if value.startswith("uploads/"):
+        return urljoin(STATIC_BASE_URL, value)
+
+    if value.lower().endswith(IMAGE_EXTENSIONS):
+        return urljoin(IMAGES_BASE_URL, f"productos/{value}")
 
     return urljoin(CATALOG_URL + "/", value)
+
+
+def _build_image_from_nombre(nombre: str) -> List[str]:
+    if not nombre:
+        return []
+
+    cleaned = str(nombre).strip()
+    if not cleaned:
+        return []
+
+    if cleaned.lower().startswith("compragamer_imganen_general_"):
+        base = cleaned
+    else:
+        base = f"compragamer_Imganen_general_{cleaned}"
+
+    if any(base.lower().endswith(ext) for ext in IMAGE_EXTENSIONS):
+        return [urljoin(IMAGES_BASE_URL, f"productos/{base}")]
+
+    return [
+        urljoin(IMAGES_BASE_URL, f"productos/{base}-grn.jpg"),
+        urljoin(IMAGES_BASE_URL, f"productos/{base}-mini.jpg"),
+    ]
+
+
+def _looks_like_logo_url(value: str) -> bool:
+    if not value:
+        return False
+
+    path = urlsplit(value).path.lower()
+    if any(hint in path for hint in LOGO_PATH_HINTS):
+        return "productos" not in path
+
+    filename = path.rsplit("/", 1)[-1]
+    return "logo" in filename or "favicon" in filename
+
+
+def _looks_like_product_image(value: str) -> bool:
+    if not value:
+        return False
+
+    path = urlsplit(value).path.lower()
+    return any(hint in path for hint in PRODUCT_PATH_HINTS) or "productos" in path
+
+
+def _score_image_candidate(value: str) -> int:
+    parsed = urlsplit(value)
+    host = parsed.netloc.lower()
+    path = parsed.path.lower()
+    score = 0
+
+    if "imagenes.compragamer.com" in host:
+        score += 60
+    if "static.compragamer.com" in host:
+        score += 30
+    if _looks_like_product_image(value):
+        score += 80
+    if path.endswith(IMAGE_EXTENSIONS):
+        score += 10
+    if _looks_like_logo_url(value):
+        score -= 120
+
+    return score
+
+
+def _pick_best_image_candidate(candidates: List[str]) -> Optional[str]:
+    normalized: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate.startswith("data:"):
+            continue
+
+        normalized_candidate = _normalize_image_url(candidate)
+        if not normalized_candidate:
+            continue
+        if normalized_candidate in seen:
+            continue
+
+        seen.add(normalized_candidate)
+        normalized.append(normalized_candidate)
+
+    if not normalized:
+        return None
+
+    filtered = [value for value in normalized if not _looks_like_logo_url(value)]
+    pool = filtered or normalized
+    product_pool = [value for value in pool if _looks_like_product_image(value)]
+    if product_pool:
+        pool = product_pool
+
+    pool.sort(key=_score_image_candidate, reverse=True)
+    best = pool[0] if pool else None
+    if best and _looks_like_logo_url(best):
+        return None
+    return best
 
 
 def _extract_product_image_from_payload(payload: Dict[str, Any]) -> Optional[str]:
@@ -191,10 +296,11 @@ def _extract_product_image_from_payload(payload: Dict[str, Any]) -> Optional[str
         "path",
     )
 
+    candidates: List[str] = []
     for key in candidate_keys:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return _normalize_image_url(value)
+            candidates.append(value.strip())
 
     nested_keys = ("images", "imagenes", "fotos", "gallery", "galeria")
     for key in nested_keys:
@@ -207,9 +313,17 @@ def _extract_product_image_from_payload(payload: Dict[str, Any]) -> Optional[str
 
         for nested in nested_values:
             if isinstance(nested, str) and nested.strip():
-                return _normalize_image_url(nested)
+                nested_value = nested.strip()
+                if nested_value.startswith("http") or nested_value.startswith("//"):
+                    candidates.append(nested_value)
+                else:
+                    candidates.extend(_build_image_from_nombre(nested_value))
             if not isinstance(nested, dict):
                 continue
+
+            nombre = nested.get("nombre") or nested.get("name")
+            if isinstance(nombre, str) and nombre.strip():
+                candidates.extend(_build_image_from_nombre(nombre))
 
             for image_key in (
                 "url",
@@ -224,9 +338,9 @@ def _extract_product_image_from_payload(payload: Dict[str, Any]) -> Optional[str
             ):
                 value = nested.get(image_key)
                 if isinstance(value, str) and value.strip():
-                    return _normalize_image_url(value)
+                    candidates.append(value.strip())
 
-    return None
+    return _pick_best_image_candidate(candidates)
 
 
 def _extract_product_image(product: Dict[str, Any], detail_payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
@@ -244,9 +358,8 @@ def _extract_image_from_html(html: str) -> Optional[str]:
     if not html:
         return None
 
-    match = IMAGE_URL_PATTERN.search(html)
-    if match:
-        return _normalize_image_url(match.group(0))
+    candidates: List[str] = []
+    candidates.extend(match.group(0) for match in IMAGE_URL_PATTERN.finditer(html))
 
     soup = BeautifulSoup(html, "html.parser")
     meta_keys = (
@@ -260,11 +373,12 @@ def _extract_image_from_html(html: str) -> Optional[str]:
         if meta:
             content = meta.get("content")
             if isinstance(content, str) and content.strip():
-                normalized = _normalize_image_url(content)
-                if normalized:
-                    return normalized
+                candidates.append(content.strip())
 
     candidate_keys = (
+        "data-zoom-image",
+        "data-large-image",
+        "data-image",
         "data-srcset",
         "data-lazy-srcset",
         "srcset",
@@ -280,16 +394,26 @@ def _extract_image_from_html(html: str) -> Optional[str]:
             if not value:
                 continue
 
-            candidate = value
             if "srcset" in key:
-                candidate = value.split(",", 1)[0].strip().split(" ", 1)[0].strip()
+                for raw_candidate in value.split(","):
+                    candidate = raw_candidate.strip().split(" ", 1)[0].strip()
+                    if candidate:
+                        candidates.append(candidate)
+                continue
 
-            if isinstance(candidate, str) and "compragamer.com" in candidate:
-                normalized = _normalize_image_url(candidate)
-                if normalized:
-                    return normalized
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
 
-    return None
+    for source in soup.select("source"):
+        value = source.get("srcset") or source.get("data-srcset")
+        if not value:
+            continue
+        for raw_candidate in str(value).split(","):
+            candidate = raw_candidate.strip().split(" ", 1)[0].strip()
+            if candidate:
+                candidates.append(candidate)
+
+    return _pick_best_image_candidate(candidates)
 
 
 async def _fetch_detail_image(
@@ -412,7 +536,10 @@ async def _load_catalog_data(client: ResilientScraperClient) -> Tuple[List[Dict[
         return _catalog_cache, _details_by_product_id_cache
 
 
-async def scrape_compra_gamer(query: str, max_pages: int = 1) -> List[dict]:
+async def scrape_compra_gamer(
+    query: str,
+    max_pages: int = 1,
+) -> List[dict]:
     """Scrapea Compra Gamer desde su catalogo JSON estatico (el listado HTML es JS-rendered)."""
     if not query or not query.strip():
         return []

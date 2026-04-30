@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Query
 
+from app.api.query_normalizer import normalize_query
 from app.schemas.product_schema import ProductSchema
 from app.services.normalize_data import normalize_data
 from app.services.scrape_all_stores import scrape_all_stores_parallel
@@ -19,10 +20,13 @@ async def scrape_all_stores_by_query(
     ),
 ):
     """Consulta las 4 tiendas en paralelo y devuelve un listado unificado normalizado."""
-    logging.info("Iniciando scraping paralelo 4 tiendas para query: %s", q)
+    normalized_query = normalize_query(q)
+    if normalized_query != q:
+        logging.info("Query normalizada: '%s' -> '%s'", q, normalized_query)
+    logging.info("Iniciando scraping paralelo 4 tiendas para query: %s", normalized_query)
 
     items_crudos = await scrape_all_stores_parallel(
-        query=q,
+        query=normalized_query,
         max_pages=max_pages,
         include_details_ml=include_details_ml,
     )

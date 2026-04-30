@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import List
 import logging
 
+from app.api.query_normalizer import normalize_query
 # Importamos los schemas y servicios necesarios
 from app.schemas.product_schema import ProductSchema
 from app.services.scrape_mercadoLibre import scrape_mercadolibre
@@ -22,10 +23,13 @@ async def do_scrape_and_normalize(
     Endpoint maestro: Busca en ML, scrapea los resultados, 
     se los pasa a la IA para normalizar características y devuelve el modelo final.
     """
-    logging.info(f"Iniciando flujo de scraping para: {q}")
+    normalized_query = normalize_query(q)
+    if normalized_query != q:
+        logging.info("Query normalizada: '%s' -> '%s'", q, normalized_query)
+    logging.info(f"Iniciando flujo de scraping para: {normalized_query}")
     
     # 1. Delegamos al servicio de scraping (ahora usaría la versión con paginación)
-    items_crudos = await scrape_mercadolibre(query=q, max_pages=max_pages, include_details=include_details)
+    items_crudos = await scrape_mercadolibre(query=normalized_query, max_pages=max_pages, include_details=include_details)
     
     if not items_crudos:
         return []

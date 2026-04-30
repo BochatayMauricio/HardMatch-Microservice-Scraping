@@ -91,6 +91,7 @@ def _is_product_url(url: str) -> bool:
 def _title_from_url(url: str) -> str:
     path = unquote(urlsplit(url).path)
     slug = path.rstrip("/").split("/")[-1]
+    slug = re.sub(r"\.html?$", "", slug, flags=re.IGNORECASE)
     title = slug.replace("-", " ")
     title = MULTISPACE_PATTERN.sub(" ", title).strip()
     return title or "Producto sin titulo"
@@ -101,6 +102,7 @@ def _normalize_title(raw_text: str, fallback_url: str) -> str:
     text = re.sub(r"\[[^\]]+\]", "", text)
     if "$" in text:
         text = text.split("$", 1)[0].strip()
+    text = re.sub(r"\.html?$", "", text, flags=re.IGNORECASE).strip()
 
     if len(text) >= 8:
         return text
