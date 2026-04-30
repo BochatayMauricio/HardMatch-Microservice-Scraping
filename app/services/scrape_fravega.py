@@ -14,6 +14,27 @@ SEARCH_API_URL = (
 PAGE_SIZE = 48
 PAGE_SLEEP_MIN_SECONDS = 1.2
 PAGE_SLEEP_MAX_SECONDS = 2.8
+PC_CATEGORY_HINTS = (
+    "computacion",
+    "informatica",
+    "tecnologia",
+    "notebook",
+    "pc",
+    "monitores",
+    "perifericos",
+)
+NON_PC_CATEGORY_HINTS = (
+    "electrodomesticos",
+    "hogar",
+    "cocina",
+    "alimentos",
+    "juguetes",
+    "jugueteria",
+    "bebes",
+    "indumentaria",
+    "moda",
+    "animales",
+)
 
 
 def _sanitize_keyword(raw_keyword: str) -> str:
@@ -21,6 +42,11 @@ def _sanitize_keyword(raw_keyword: str) -> str:
     keyword = re.sub(r"[^a-z0-9]+", "_", keyword)
     keyword = re.sub(r"_+", "_", keyword).strip("_")
     return keyword or "feature"
+
+
+def _normalize_text(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value or "").strip().lower()
+    return compact
 
 
 def _pick_best_seller_offer(product: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -129,25 +155,28 @@ def _extract_raw_features(product: Dict[str, Any]) -> List[Dict[str, str]]:
 
     return features
 
-def _is_accessory(product: Dict[str, Any], title: str) -> bool:
-    """Detecta si un producto es un accesorio usando título y categorías específicas."""
-    title_lower = title.lower()
 
-    # 1. Filtro por frases obvias en el título
-    if "porta notebook" in title_lower or "portanotebook" in title_lower:
-        return True
-    
-    # 2. Si arranca con estas palabras, 100% seguro no es una compu
-    if title_lower.startswith(("mochila", "funda", "maletin", "maletín", "bolso", "portafolio", "soporte", "base", "cargador", "candado", "cable")):
-        return True
 
-    # 3. Filtro por categoría (MÁS SUAVE)
-    # Quitamos la palabra "accesorios" porque Frávega la usa como categoría padre ("Computación y Accesorios")
-    categories = product.get("categories") or []
-    for cat in categories:
-        cat_lower = str(cat).lower()
-        if any(keyword in cat_lower for keyword in ["mochilas", "fundas", "indumentaria", "cables"]):
+def _is_irrelevant_for_pc(query: str, title: str, categories: List[str]) -> bool:
+    normalized_title = _normalize_text(title)
+    normalized_query = _normalize_text(query)
+
+    if "mouse" in normalized_query:
+        if any(keyword in normalized_title for keyword in ("mickey", "minnie", "disney", "peluche", "juguete", "muneco")):
             return True
+
+    if any(term in normalized_query for term in ("procesador", "cpu")):
+        if any(keyword in normalized_title for keyword in ("procesadora", "alimentos", "cocina", "food", "kitchen")):
+            return True
+
+    if any(keyword in normalized_title for keyword in ("mickey", "minnie", "disney", "peluche", "juguete", "muneco")):
+        return True
+
+    if categories:
+        category_text = _normalize_text(" ".join(categories))
+        if any(keyword in category_text for keyword in NON_PC_CATEGORY_HINTS):
+            if not any(keyword in category_text for keyword in PC_CATEGORY_HINTS):
+                return True
 
     return False
 async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
@@ -192,6 +221,7 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
 
                 title = str(product.get("productName") or "").strip()
                 product_url = str(product.get("link") or "").strip()
+                categories = product.get("categories") or []
 
                 logging.info("PROCESANDO: %s - URL: %s", title, product_url)
 
@@ -200,8 +230,8 @@ async def scrape_fravega(query: str, max_pages: int = 1) -> List[dict]:
                     logging.warning("SALTEADO: %s - URL invalida o vacia", title)
                     continue
 
-                if _is_accessory(product, title):
-                    logging.info("DESCARTADO (Es Accesorio): %s", title)
+                if _is_irrelevant_for_pc(query, title, categories):
+                    logging.info("DESCARTADO (No PC): %s", title)
                     continue
 
                 seller_name, offer = _pick_best_seller_offer(product)

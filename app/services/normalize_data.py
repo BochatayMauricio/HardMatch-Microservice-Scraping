@@ -35,6 +35,13 @@ BRAND_KEYWORDS: Dict[str, str] = {
 }
 
 CATEGORY_PATTERNS: List[Tuple[re.Pattern, str]] = [
+    (
+        re.compile(
+            r"\b(soporte|stand|base\s+refrigerante|cooler\s*pad|cooling\s*pad|dock(ing)?|porta\s*notebook|portanotebook)\b",
+            re.IGNORECASE,
+        ),
+        "Accesorios",
+    ),
     (re.compile(r"\b(notebook|laptop|ultrabook)\b", re.IGNORECASE), "Notebooks"),
     (re.compile(r"\bmonitor(es)?\b", re.IGNORECASE), "Monitores"),
     (re.compile(r"\b(placa\s*de\s*video|gpu|rtx|gtx|radeon)\b", re.IGNORECASE), "Placas de Video"),
@@ -56,6 +63,7 @@ PROCESSOR_PATTERN = re.compile(
     r"(intel\s*core\s*ultra\s*[3579]|intel\s*core\s*i[3579]|ryzen\s*(ai\s*)?[3579]\s*\d{3,4}x?|pentium|celeron)",
     re.IGNORECASE,
 )
+RAM_MODULE_PATTERN = re.compile(r"\b(memoria\s*ram|modulo\s*ram|ram\s*sodimm|sodimm|udimm|dimm)\b", re.IGNORECASE)
 RAM_PATTERN = re.compile(r"(\d{1,3})\s*gb\s*(ram|ddr[345])", re.IGNORECASE)
 RAM_FALLBACK_PATTERN = re.compile(r"\b(\d{1,3})\s*gb\b", re.IGNORECASE)
 STORAGE_PATTERN = re.compile(r"(\d{2,4})\s*(gb|tb)\s*(ssd|hdd|nvme)?", re.IGNORECASE)
@@ -125,6 +133,30 @@ def _normalize_keyword(raw_keyword: str) -> str:
     keyword = re.sub(r"[^a-z0-9]+", "_", keyword)
     keyword = re.sub(r"_+", "_", keyword).strip("_")
     return RAW_KEYWORD_ALIASES.get(keyword, keyword or "feature")
+
+
+def _extract_brand_from_raw_features(raw_features: List[dict]) -> Tuple[Optional[str], List[dict]]:
+    if not raw_features:
+        return None, []
+
+    brand_name: Optional[str] = None
+    filtered: List[dict] = []
+    for raw in raw_features:
+        if not isinstance(raw, dict):
+            continue
+
+        keyword_raw = str(raw.get("keyword") or raw.get("name") or "").strip()
+        keyword_norm = _normalize_keyword(keyword_raw) if keyword_raw else ""
+
+        if keyword_norm in {"marca_api", "marca", "brand", "brand_name"}:
+            value = str(raw.get("value") or raw.get("valor") or "").strip()
+            if value and value.lower() != "no especificado" and not brand_name:
+                brand_name = value
+            continue
+
+        filtered.append(raw)
+
+    return brand_name, filtered
 
 
 def _to_float(value: Optional[Any]) -> Optional[float]:
@@ -238,6 +270,8 @@ def _extract_brand(title: str) -> Optional[BrandSchema]:
 
 
 def _extract_category(title: str) -> Optional[str]:
+    if RAM_MODULE_PATTERN.search(title):
+        return "Memorias RAM"
     for pattern, category in CATEGORY_PATTERNS:
         if pattern.search(title):
             return category
@@ -338,6 +372,15 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
                 url_candidates,
             )
             continue
+        if _looks_like_image_url(url):
+            store_name = _resolve_store_name(item)
+            logging.warning(
+                "URL de acceso parece imagen en tienda '%s' para '%s': %s",
+                store_name,
+                title or "Sin nombre",
+                url,
+            )
+            continue
         if not title:
             title = _title_from_url(url)
 
@@ -357,6 +400,12 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
         if not category and title:
             category = _extract_category(title)
 
+        raw_features = _first_present(item, ["caracteristicas", "features"]) or []
+        if not isinstance(raw_features, list):
+            raw_features = []
+
+        brand_from_features, raw_features = _extract_brand_from_raw_features(raw_features)
+
         raw_brand = _first_present(item, ["marca", "brand", "brand_name"])
         brand_name: Optional[str] = None
         if isinstance(raw_brand, dict):
@@ -366,11 +415,20 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
         elif raw_brand:
             brand_name = str(raw_brand).strip()
 
-        brand = BrandSchema(name=brand_name) if brand_name else (_extract_brand(title) if title else None)
+        if not brand_name and brand_from_features:
+            brand_name = brand_from_features
 
-        raw_features = _first_present(item, ["caracteristicas", "features"]) or []
-        if not isinstance(raw_features, list):
-            raw_features = []
+        if seller and brand_name and seller.lower() == brand_name.lower():
+            brand_name = None
+
+        if not brand_name and title:
+            inferred = _extract_brand(title)
+            brand_name = inferred.name if inferred else None
+
+        if not brand_name:
+            brand_name = "Sin marca"
+
+        brand = BrandSchema(name=brand_name)
 
         features = _extract_features(metodo_pago, raw_features)
         if sample_logged < 2:
