@@ -372,6 +372,15 @@ def normalize_data(items_crudos: List[dict]) -> List[ProductSchema]:
                 url_candidates,
             )
             continue
+        if _looks_like_image_url(url):
+            store_name = _resolve_store_name(item)
+            logging.warning(
+                "URL de acceso parece imagen en tienda '%s' para '%s': %s",
+                store_name,
+                title or "Sin nombre",
+                url,
+            )
+            continue
         if not title:
             title = _title_from_url(url)
 
