@@ -15,7 +15,7 @@ async def scrape_all_stores_by_query(
     q: str = Query("notebook", description="Termino de busqueda"),
     max_pages: int = Query(1, ge=1, le=10, description="Cantidad de paginas por tienda"),
     include_details_ml: bool = Query(
-        False,
+        True,
         description="Si es true, Mercado Libre tambien extrae caracteristicas desde detalle",
     ),
 ):

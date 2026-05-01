@@ -18,7 +18,7 @@ STORE_NAMES: Dict[str, str] = {
 async def scrape_all_stores_parallel(
     query: str,
     max_pages: int = 1,
-    include_details_ml: bool = False,
+    include_details_ml: bool = True,
 ) -> List[dict]:
     """Ejecuta scraping en las 4 tiendas en paralelo y devuelve items crudos combinados."""
     tasks_by_store = {
