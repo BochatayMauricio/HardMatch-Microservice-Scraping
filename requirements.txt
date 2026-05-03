@@ -6,3 +6,5 @@ playwright
 google-genai
 pydantic
 python-dotenv
+selenium
+webdriver_manager

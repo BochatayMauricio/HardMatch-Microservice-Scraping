@@ -68,6 +68,7 @@ def _looks_like_block_page(html: str) -> bool:
 async def scrape_mercadolibre(
     query: str,
     max_pages: int = 1,
+    max_items: int = 15,
     include_details: bool = True,
     headless: bool = True,
 ) -> List[dict]:
@@ -202,6 +203,12 @@ async def scrape_mercadolibre(
                         "vendedor": vendedor,
                         "metodo_pago": metodo_pago
                     })
+
+                    if len(items_crudos) + len(page_items) >= max_items:
+                        break
+                    
+                    logging.info(f"✅ Página {page_num + 1} procesada: Se extrajeron {len(page_items)} productos únicos.")
+                    items_crudos.extend(page_items) 
                 
                 logging.info(f"✅ Página {page_num + 1} procesada: Se extrajeron {len(page_items)} productos únicos.")
                 items_crudos.extend(page_items)
@@ -258,6 +265,10 @@ async def scrape_mercadolibre(
                                 driver.close()
                                 driver.switch_to.window(driver.window_handles[0])
 
+                if len(items_crudos) >= max_items:
+                    logging.info(f"🛑 Límite de {max_items} productos alcanzado. Cortando paginación.")
+                    break
+                    
                 if page_num < max_pages - 1:
                     time.sleep(random.uniform(PAGE_SLEEP_MIN_SECONDS, PAGE_SLEEP_MAX_SECONDS))
                 
