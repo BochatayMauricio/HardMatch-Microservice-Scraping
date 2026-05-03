@@ -206,10 +206,10 @@ async def scrape_mercadolibre(
 
                     if len(items_crudos) + len(page_items) >= max_items:
                         break
-                    
-                    logging.info(f"✅ Página {page_num + 1} procesada: Se extrajeron {len(page_items)} productos únicos.")
-                    items_crudos.extend(page_items) 
-                
+
+                remaining_slots = max_items - len(items_crudos)
+                page_items = page_items[:remaining_slots]
+
                 logging.info(f"✅ Página {page_num + 1} procesada: Se extrajeron {len(page_items)} productos únicos.")
                 items_crudos.extend(page_items)
                 
