@@ -143,8 +143,10 @@ async def _fetch_product_features(
 async def scrape_mercadolibre(
     query: str,
     max_pages: int = 1,
-    include_details: bool = False,
+    include_details: bool = True,
 ) -> List[dict]:
+    # Ejecuta el diagnóstico
+    await diagnose_ml_block()
     """
     Scrapea múltiples páginas de Mercado Libre por texto de búsqueda.
     max_pages: Cantidad de páginas a scrapear (cada página trae ~50 productos).
@@ -251,3 +253,24 @@ async def scrape_mercadolibre(
         logging.warning("Mercado Libre: descartados sin imagen=%s", discarded_no_image)
 
     return items_crudos
+
+
+async def diagnose_ml_block():
+    """Diagnostica si ML está bloqueando"""
+    async with ResilientScraperClient() as client:
+        # Prueba 1: Página principal
+        html = await client.get_text("https://www.mercadolibre.com.ar/")
+        if html:
+            if "captcha" in html.lower() or "robot" in html.lower():
+                print("❌ BLOQUEADO: Captcha detectado")
+            elif len(html) < 10000:
+                print(f"❌ BLOQUEADO: HTML muy pequeño ({len(html)} bytes)")
+            else:
+                print("✅ Página principal OK")
+        
+        # Prueba 2: Búsqueda simple
+        html = await client.get_text("https://listado.mercadolibre.com.ar/telefono")
+        if html and "captcha" in html.lower():
+            print("❌ BLOQUEADO: Captcha en búsqueda")
+        else:
+            print("✅ Búsqueda aparentemente OK")

@@ -4,7 +4,7 @@ from typing import Dict, List
 
 from app.services.scrape_compraGamer import scrape_compra_gamer
 from app.services.scrape_fravega import scrape_fravega
-from app.services.scrape_mercadoLibre import scrape_mercadolibre
+from app.services.scrape_mercadolibre_selenium import scrape_mercadolibre
 from app.services.scrape_venex import scrape_venex
 
 
@@ -18,12 +18,13 @@ STORE_NAMES: Dict[str, str] = {
 async def scrape_all_stores_parallel(
     query: str,
     max_pages: int = 1,
-    include_details_ml: bool = False,
+    max_items=15,
+    include_details_ml: bool = True,
 ) -> List[dict]:
     """Ejecuta scraping en las 4 tiendas en paralelo y devuelve items crudos combinados."""
     tasks_by_store = {
         "mercadolibre": asyncio.create_task(
-            scrape_mercadolibre(query=query, max_pages=max_pages, include_details=include_details_ml)
+            scrape_mercadolibre(query=query, max_pages=max_pages, max_items=max_items, include_details=include_details_ml, headless=True)
         ),
         "compragamer": asyncio.create_task(scrape_compra_gamer(query=query, max_pages=max_pages)),
         "fravega": asyncio.create_task(scrape_fravega(query=query, max_pages=max_pages)),

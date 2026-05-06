@@ -14,8 +14,9 @@ router = APIRouter(prefix="/all-stores", tags=["All Stores"])
 async def scrape_all_stores_by_query(
     q: str = Query("notebook", description="Termino de busqueda"),
     max_pages: int = Query(1, ge=1, le=10, description="Cantidad de paginas por tienda"),
+    max_items: int = Query(15, ge=1, le=50, description="Límite de ítems"),
     include_details_ml: bool = Query(
-        False,
+        True,
         description="Si es true, Mercado Libre tambien extrae caracteristicas desde detalle",
     ),
 ):
@@ -28,6 +29,7 @@ async def scrape_all_stores_by_query(
     items_crudos = await scrape_all_stores_parallel(
         query=normalized_query,
         max_pages=max_pages,
+        max_items=max_items,
         include_details_ml=include_details_ml,
     )
 
